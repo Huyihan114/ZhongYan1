@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>ZHONGYAN1 - Life Soup</title>
+  <style>
+    html, body { margin: 0; padding: 0; overflow: hidden; background: #eee; font-family: system-ui; }
+    canvas { display: block; }
+    
+    /* 隐藏的视频元素，用于 MediaPipe 捕捉 */
+    #input_video {
+      position: absolute;
+      top: 0; left: 0;
+      width: 0px; height: 0px;
+      opacity: 0;
+      pointer-events: none;
+    }
+
+    /* 右下角输入面板保持不变 */
+    #panel{
+      position: fixed;
+      right: 16px; bottom: 16px; z-index: 10;
+      width: 380px;
+      background: rgba(255,255,255,0.86);
+      border: 1px solid rgba(0,0,0,0.12);
+      border-radius: 14px;
+      backdrop-filter: blur(10px);
+      padding: 12px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.08);
+    }
+    #q{ font-size: 14px; line-height: 1.5; margin-bottom: 10px; color: #111; }
+    textarea{
+      width: 100%; height: 92px; resize: none; border-radius: 12px;
+      border: 1px solid rgba(0,0,0,0.15); padding: 10px;
+      font-size: 14px; outline: none; box-sizing: border-box;
+      background: rgba(255,255,255,0.9);
+    }
+    .row{ display:flex; gap:8px; margin-top:10px; align-items:center; }
+    button{
+      border-radius: 12px; border: 1px solid rgba(0,0,0,0.15);
+      padding: 8px 10px; font-size: 14px; cursor: pointer; background: #fff;
+    }
+    button.primary{ background: #111; color: #fff; border-color: #111; }
+    #result{ margin-left: auto; font-size: 12px; color: #333; opacity: 0.9; white-space: nowrap; }
+    #hint{ margin-top: 8px; font-size: 12px; color: #666; line-height: 1.4; }
+  </style>
+
+  <!-- 1) MediaPipe 依赖 -->
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/control_utils/control_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js" crossorigin="anonymous"></script>
+</head>
+<body>
+
+  <!-- 用于捕捉摄像头的隐藏 Video -->
+  <video id="input_video"></video>
+
+  <!-- 2) p5 -->
+  <script src="https://cdn.jsdelivr.net/npm/p5@1.9.0/lib/p5.min.js"></script>
+
+  <!-- 3) 手势逻辑 -->
+  <script src="./hands.js"></script>
+
+  <!-- 4) 视觉生成逻辑 -->
+  <script src="./sketch.js"></script>
+
+  <!-- UI 面板 -->
+  <div id="panel">
+    <div id="q">加载问题中…</div>
+    <textarea id="text" placeholder="写一句话就好（不需要完整故事）。&#10;Ctrl/⌘ + Enter 快速提交"></textarea>
+    <div class="row">
+      <button id="next">换一个问题</button>
+      <button class="primary" id="send">提交</button>
+      <div id="result"></div>
+    </div>
+    <div id="hint">
+      提交后将调用 Moonshot 情绪识别接口，返回：情绪(8类) + 强度(0~1)，并驱动画面变化。<br/>
+      <b>交互：</b>食指作画，拳头擦除。
+    </div>
+  </div>
+
+  <script>
+    // 启动手势识别
+    window.addEventListener('load', () => {
+        if(window.initHandGesture) {
+            window.initHandGesture('input_video');
+        }
+    });
+
+    const $q = document.getElementById("q");
+    const $text = document.getElementById("text");
+    const $send = document.getElementById("send");
+    const $next = document.getElementById("next");
+    const $result = document.getElementById("result");
+
+    let questions = [];
+    let qi = 0;
+
+    function showQuestion(i){
+      if(!questions.length) return;
+      qi = (i + questions.length) % questions.length;
+      $q.textContent = questions[qi];
+    }
+
+    async function loadQuestions(){
+      try{
+        // 假设这里有一个后端API，如果没有则跳过
+        const r = await fetch("/api/questions");
+        const d = await r.json();
+        questions = d.questions || [];
+        if(questions.length) showQuestion(Math.floor(Math.random() * questions.length));
+      }catch(err){
+        $q.textContent = "Life Soup Ready.";
+      }
+    }
+
+    async function classifyAndApply(){
+      const text = $text.value.trim();
+      if(!text){ $result.textContent = "请先输入一句话"; return; }
+      $result.textContent = "分析中…";
+      try{
+        const r = await fetch("/api/classify", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text })
+        });
+        const d = await r.json();
+        const emo = d.emotion;
+        const intensity = d.intensity;
+        $result.textContent = `${emo} 强度${Number(intensity ?? 0).toFixed(2)}`;
+        
+        if (window.applySemanticFromOutside) {
+          window.applySemanticFromOutside(emo, intensity);
+        }
+      }catch(err){
+        console.error(err);
+        // 如果没有后端，这里仅作演示用
+        $result.textContent = "演示模式: 随机情绪";
+        const emotions = ["喜悦","信任","愤怒","惊讶","期待","悲伤","恐惧","厌恶"];
+        const randEmo = emotions[Math.floor(Math.random()*emotions.length)];
+        if (window.applySemanticFromOutside) window.applySemanticFromOutside(randEmo, 0.8);
+      }
+    }
+
+    $send.onclick = classifyAndApply;
+    $next.onclick = () => showQuestion(qi + 1);
+    
+    // 快捷键提交
+    $text.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+            classifyAndApply();
+        }
+    });
+
+    loadQuestions();
+  </script>
+
+</body>
+</html>
